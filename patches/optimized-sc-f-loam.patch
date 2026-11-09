@@ -1,0 +1,257 @@
+diff --git a/optimized-sc-f-loam-16/CMakeLists.txt b/optimized-sc-f-loam-16/CMakeLists.txt
+index 95b2a7f..4d87628 100644
+--- a/optimized-sc-f-loam-16/CMakeLists.txt
++++ b/optimized-sc-f-loam-16/CMakeLists.txt
+@@ -21,7 +21,11 @@ find_package(catkin REQUIRED COMPONENTS
+         cv_bridge
+ )
+ 
+-find_package(Boost REQUIRED COMPONENTS timer)
++find_package(Boost REQUIRED COMPONENTS
++    timer
++    serialization
++    thread
++)
+ find_package(OpenCV REQUIRED)
+ find_package(GTSAM REQUIRED QUIET)
+ find_package(Eigen3)
+@@ -82,7 +86,10 @@ target_compile_options(sc_floam_laserLO_16
+         PRIVATE ${OpenMP_CXX_FLAGS}
+         )
+ target_link_libraries(sc_floam_laserLO_16
+-        ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${CERES_LIBRARIES}
++        ${catkin_LIBRARIES}
++        ${PCL_LIBRARIES}
++        ${CERES_LIBRARIES}
+         ${OpenMP_CXX_FLAGS}
+         gtsam
+-        )
++        ${Boost_LIBRARIES}
++        )
+\ No newline at end of file
+diff --git a/optimized-sc-f-loam/CMakeLists.txt b/optimized-sc-f-loam/CMakeLists.txt
+index 07c1d24..090c3bc 100644
+--- a/optimized-sc-f-loam/CMakeLists.txt
++++ b/optimized-sc-f-loam/CMakeLists.txt
+@@ -21,7 +21,11 @@ find_package(catkin REQUIRED COMPONENTS
+   cv_bridge
+ )
+ 
+-find_package(Boost REQUIRED COMPONENTS timer)
++find_package(Boost REQUIRED COMPONENTS
++  timer
++  serialization
++  thread
++)
+ find_package(OpenCV REQUIRED)
+ find_package(GTSAM REQUIRED QUIET)
+ find_package(Eigen3)
+@@ -41,10 +45,13 @@ find_package(Ceres REQUIRED)
+ 
+ include_directories(
+   include
+-  ${catkin_INCLUDE_DIRS} 
++  ${catkin_INCLUDE_DIRS}
+   ${PCL_INCLUDE_DIRS}
+   ${CERES_INCLUDE_DIRS}
+-  ${EIGEN3_INCLUDE_DIRS} ${GTSAM_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS}
++  ${EIGEN3_INCLUDE_DIRS}
++  ${GTSAM_INCLUDE_DIR}
++  ${OpenCV_INCLUDE_DIRS}
++  ${Boost_INCLUDE_DIRS}
+ )
+ 
+ link_directories(
+@@ -81,8 +88,12 @@ add_executable(sc_floam_laserLO
+ target_compile_options(sc_floam_laserLO
+         PRIVATE ${OpenMP_CXX_FLAGS}
+         )
++        
+ target_link_libraries(sc_floam_laserLO
+-        ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${CERES_LIBRARIES}
+-        ${OpenMP_CXX_FLAGS}
+-        gtsam
+-        )
++  ${catkin_LIBRARIES}
++  ${PCL_LIBRARIES}
++  ${CERES_LIBRARIES}
++  ${OpenMP_CXX_FLAGS}
++  gtsam
++  ${Boost_LIBRARIES}
++)
+diff --git a/optimized-sc-f-loam/include/laserLoopOptimizationClass.h b/optimized-sc-f-loam/include/laserLoopOptimizationClass.h
+index f240d66..be4a746 100644
+--- a/optimized-sc-f-loam/include/laserLoopOptimizationClass.h
++++ b/optimized-sc-f-loam/include/laserLoopOptimizationClass.h
+@@ -63,10 +63,14 @@
+ #include "lidar.h"
+ #include "scancontext/Scancontext.h"
+ #include "lidarOptimization.h"
++#include <fstream>
++#include <iomanip>
+ 
+ class laserLoopOptimizationClass {
+ public:
+     laserLoopOptimizationClass();
++    std::ofstream loopConstraintFile;
++    std::string loopConstraintDirectory;
+     //process_pg
+     //将nav_msgs::Odometry以及nav_msgs::Odometry信息转化为Pose6D信息
+     static Pose6D getOdom(const nav_msgs::Odometry::ConstPtr& _odom);
+diff --git a/optimized-sc-f-loam/launch/optimized_sc_f_loam_mapping.launch b/optimized-sc-f-loam/launch/optimized_sc_f_loam_mapping.launch
+index 5fc8388..1f0b88e 100644
+--- a/optimized-sc-f-loam/launch/optimized_sc_f_loam_mapping.launch
++++ b/optimized-sc-f-loam/launch/optimized_sc_f_loam_mapping.launch
+@@ -2,7 +2,7 @@
+ <launch>
+ 
+     
+-    <node pkg="rosbag" type="play" name="rosbag_play" args="--clock -r 1 /media/llz/Extreme\ SSD/KITTI/bag包/2011_09_30_0018.bag"/>
++    <node pkg="rosbag" type="play" name="rosbag_play" args="--clock -r 1 /ros_ws/dataset/recorded-optimized-sc-f-loam.bag"/>
+ 
+     <!-- For Velodyne VLP-16 
+     <param name="scan_line" value="16" />
+@@ -39,7 +39,7 @@
+     
+   	<node pkg="hector_trajectory_server" type="hector_trajectory_server" name="trajectory_server_loam" ns="gt" >
+         <param name="/target_frame_name" value="world" />
+-        <param name="/source_frame_name" value="velodyne" />
++        <param name="/source_frame_name" value="base_link" />
+         <param name="/trajectory_update_rate" value="20.0" />
+         <param name="/trajectory_publish_rate" value="20.0" />
+     </node>
+diff --git a/optimized-sc-f-loam/src/laserLoopOptimizationClass.cpp b/optimized-sc-f-loam/src/laserLoopOptimizationClass.cpp
+index f98b17d..8dd4a84 100644
+--- a/optimized-sc-f-loam/src/laserLoopOptimizationClass.cpp
++++ b/optimized-sc-f-loam/src/laserLoopOptimizationClass.cpp
+@@ -615,6 +615,70 @@ bool laserLoopOptimizationClass::doloopclosure(ros::Publisher &pubLoopScanLocal,
+     if(correct)
+     {
+         gtsam::Pose3 relative_pose = relative_pose_optional.value();
++            // =========================
++        // CSV
++        // =========================
++        if (loopConstraintFile.is_open())
++        {
++            loopConstraintFile
++                << curr_node_idx << ","
++                << prev_node_idx << ","
++                << std::fixed << std::setprecision(20)
++                << keyframeTimes.at(curr_node_idx) << ","
++                << keyframeTimes.at(prev_node_idx) << ","
++                << std::defaultfloat << std::setprecision(9)
++                << relative_pose.translation().x() << ","
++                << relative_pose.translation().y() << ","
++                << relative_pose.translation().z() << ","
++                << relative_pose.rotation().roll() << ","
++                << relative_pose.rotation().pitch() << ","
++                << relative_pose.rotation().yaw()
++                << "\n";
++
++            loopConstraintFile.flush();
++        }
++
++        // =========================
++        // PCD CURRENT
++        // =========================
++        pcl::PointCloud<PointType>::Ptr currentCloud(
++            new pcl::PointCloud<PointType>()
++        );
++
++        *currentCloud += *cureKeyframeCloud_surf;
++        *currentCloud += *cureKeyframeCloud_edge;
++
++        if (!currentCloud->empty())
++        {
++            std::ostringstream name;
++            name << loopConstraintDirectory
++                << "loop_" << curr_node_idx
++                << "_current_" << prev_node_idx
++                << ".pcd";
++
++            pcl::io::savePCDFileBinary(name.str(), *currentCloud);
++        }
++
++        // =========================
++        // PCD HISTORY
++        // =========================
++        pcl::PointCloud<PointType>::Ptr historyCloud(
++            new pcl::PointCloud<PointType>()
++        );
++
++        *historyCloud += *laserCloudSurfMap;
++        *historyCloud += *laserCloudCornerMap;
++
++        if (!historyCloud->empty())
++        {
++            std::ostringstream name;
++            name << loopConstraintDirectory
++                << "loop_" << curr_node_idx
++                << "_history_" << prev_node_idx
++                << ".pcd";
++
++            pcl::io::savePCDFileBinary(name.str(), *historyCloud);
++        }
+         mtxPosegraph.lock();
+         gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Pose3>(prev_node_idx, curr_node_idx, relative_pose, robustLoopNoise));
+ //        cout << "添加回环节点成功" << endl;
+@@ -622,13 +686,32 @@ bool laserLoopOptimizationClass::doloopclosure(ros::Publisher &pubLoopScanLocal,
+ 
+         // loop verification
+         sensor_msgs::PointCloud2 cureKeyframeCloudMsg;
+-        pcl::toROSMsg(*cureKeyframeCloud_surf + *cureKeyframeCloud_edge, cureKeyframeCloudMsg);
++        pcl::toROSMsg(
++            *cureKeyframeCloud_surf + *cureKeyframeCloud_edge,
++            cureKeyframeCloudMsg
++        );
++
+         cureKeyframeCloudMsg.header.frame_id = "map";
++
++        // CURRENT
++        cureKeyframeCloudMsg.header.stamp =
++            ros::Time(keyframeTimes.at(curr_node_idx));
++
+         pubLoopScanLocal.publish(cureKeyframeCloudMsg);
+ 
++
+         sensor_msgs::PointCloud2 targetKeyframeCloudMsg;
+-        pcl::toROSMsg(*laserCloudSurfMap + *laserCloudCornerMap, targetKeyframeCloudMsg);
++        pcl::toROSMsg(
++            *laserCloudSurfMap + *laserCloudCornerMap,
++            targetKeyframeCloudMsg
++        );
++
+         targetKeyframeCloudMsg.header.frame_id = "map";
++
++        // HISTORY
++        targetKeyframeCloudMsg.header.stamp =
++            ros::Time(keyframeTimes.at(prev_node_idx));
++
+         pubLoopSubmapLocal.publish(targetKeyframeCloudMsg);
+         return correct;
+     }
+@@ -855,10 +938,19 @@ void laserLoopOptimizationClass::pubPath(ros::Publisher& pubOdomAftPGO, ros::Pub
+ 
+ laserLoopOptimizationClass::laserLoopOptimizationClass()
+ {
++    loopConstraintDirectory = "/tmp/";
+ 
+-}
+-
+-
+-
+-
++    loopConstraintFile.open(
++        loopConstraintDirectory + "loop_constraints.csv",
++        std::ios::out | std::ios::trunc
++    );
+ 
++    if (loopConstraintFile.is_open())
++    {
++        loopConstraintFile
++            << "current_id,history_id,"
++            << "current_time,history_time,"
++            << "tx,ty,tz,roll,pitch,yaw\n";
++        loopConstraintFile.flush();
++    }
++}

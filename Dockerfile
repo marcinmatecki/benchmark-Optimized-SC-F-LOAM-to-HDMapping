@@ -114,6 +114,9 @@ WORKDIR /ros_ws
 
 COPY ./src ./src
 
+COPY patches /tmp/patches
+RUN cd /ros_ws/src/Optimized-SC-F-LOAM && \
+    patch -p1 < /tmp/patches/optimized-sc-f-loam.patch
 # ---------------------------------------------------------
 # ROS environment
 # ---------------------------------------------------------
