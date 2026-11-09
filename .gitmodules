@@ -1,0 +1,9 @@
+[submodule "src/Optimized-SC-F-LOAM"]
+	path = src/Optimized-SC-F-LOAM
+	url = https://github.com/SlamCabbage/Optimized-SC-F-LOAM.git
+[submodule "src/livox_ros_driver"]
+	path = src/livox_ros_driver
+	url = https://github.com/Livox-SDK/livox_ros_driver.git
+[submodule "src/optimized-sc-f-loam-to-hdmapping/src/3rdparty/LASzip"]
+	path = src/optimized-sc-f-loam-to-hdmapping/src/3rdparty/LASzip
+	url = https://github.com/LASzip/LASzip.git
